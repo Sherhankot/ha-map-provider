@@ -62,7 +62,47 @@ const MAP_WATCHED = Symbol.for("ha-map-provider/map");
 // first and draw maps before extra_module_url arrives.
 const shared = (globalThis[PATCHED] ??= {});
 shared.maps ??= new Set();
-const requested = new URL(import.meta.url).searchParams.get("provider");
+const params = new URL(import.meta.url).searchParams;
+const requested = params.get("provider");
+
+// ?debug: a report to HA's log (Settings - System - Logs), for clients without
+// a console such as the mobile app. Versions before 1.1.2 do not register in
+// `instances`; a prototype marked `true` is their patch.
+const VERSION = "1.1.2";
+(shared.instances ??= []).push(
+  `${VERSION} ${import.meta.url.replace(location.origin, "")}`
+);
+shared.debug ||= params.has("debug");
+let reportTimer;
+const report = () => {
+  clearTimeout(reportTimer);
+  reportTimer = setTimeout(() => {
+    const maps = [...shared.maps].map((leafletMap) => {
+      const layers = [];
+      leafletMap.eachLayer((layer) => {
+        if (typeof layer._url === "string") {
+          layers.push(`${layer._url.split("?")[0]} [${String(layer[PATCHED])}]`);
+        }
+      });
+      return layers.join(", ");
+    });
+    const proto = customElements.get("ha-map")?.prototype;
+    const message =
+      `ha-map-provider debug: provider=${shared.name}; ` +
+      `instances=${JSON.stringify(shared.instances)}; ` +
+      `old patch=${proto?.[PATCHED] === true}; maps=${JSON.stringify(maps)}; ` +
+      `ua=${navigator.userAgent}`;
+    console.info(message);
+    document
+      .querySelector("home-assistant")
+      ?.hass?.callService("system_log", "write", {
+        message,
+        level: "warning",
+        logger: "ha_map_provider",
+      })
+      .catch((err) => console.error("ha-map-provider: log write failed", err));
+  }, 15000);
+};
 let switched = false;
 if (requested && !PROVIDERS[requested]) {
   console.error(
@@ -167,6 +207,9 @@ const watchMap = (leafletMap) => {
   }
   leafletMap[MAP_WATCHED] = true;
   shared.maps.add(leafletMap);
+  if (shared.debug) {
+    report();
+  }
   leafletMap.on("unload", () => shared.maps.delete(leafletMap));
   leafletMap.eachLayer((layer) => patchLayer(leafletMap, layer));
   // A base layer may come later, e.g. 2026.9's raster fallback.
