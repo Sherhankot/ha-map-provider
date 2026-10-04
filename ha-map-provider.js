@@ -88,7 +88,7 @@ const report = () => {
     });
     const proto = customElements.get("ha-map")?.prototype;
     const message =
-      `ha-map-provider debug: provider=${shared.name}; ` +
+      `ha-map-provider debug: provider=${shared.name} (${shared.source}); ` +
       `instances=${JSON.stringify(shared.instances)}; ` +
       `old patch=${proto?.[PATCHED] === true}; maps=${JSON.stringify(maps)}; ` +
       `ua=${navigator.userAgent}`;
@@ -116,6 +116,7 @@ if (requested && !PROVIDERS[requested]) {
 } else if (requested || !shared.name) {
   switched = Boolean(shared.name) && shared.name !== (requested || "2gis");
   shared.name = requested || "2gis";
+  shared.source = requested ? "?provider" : "default";
 }
 
 const fillUrl = (template, x, y, z) =>
@@ -291,10 +292,40 @@ if (!shared.name) {
   };
 }
 
-if (switched) {
-  // Maps drawn under the default before this ?provider arrived.
+// Maps drawn under the default before the provider was known.
+const switchMaps = () => {
   shared.maps.forEach((leafletMap) =>
     leafletMap.eachLayer((layer) => patchLayer(leafletMap, layer))
   );
   console.info(`ha-map-provider: base map -> ${shared.name}`);
+};
+if (switched) {
+  switchMaps();
+}
+
+// The Android companion app runs dashboard resources but not
+// extra_module_url (app 2026.6.5, seen 2026-10-04): the HACS resource is the
+// only copy there, and it has no ?provider. Such a copy reads the provider
+// from the extra_module_url line of the page the server sends now.
+if (!requested && shared.source === "default" && !shared.discovering) {
+  shared.discovering = true;
+  window
+    .fetch("/", { cache: "no-store", credentials: "same-origin" })
+    .then((response) => response.text())
+    .then((page) => {
+      const found = page.match(
+        /ha-map-provider\.js\?[^"'\s]*?\bprovider=([\w-]+)/
+      )?.[1];
+      if (!found || !PROVIDERS[found] || shared.source !== "default") {
+        return;
+      }
+      shared.source = "page";
+      if (shared.name !== found) {
+        shared.name = found;
+        switchMaps();
+      }
+    })
+    .catch(() => {
+      // The default stays.
+    });
 }
