@@ -68,7 +68,7 @@ const requested = params.get("provider");
 // ?debug: a report to HA's log (Settings - System - Logs), for clients without
 // a console such as the mobile app. Versions before 1.1.2 do not register in
 // `instances`; a prototype marked `true` is their patch.
-const VERSION = "1.1.2";
+const VERSION = "1.1.3";
 (shared.instances ??= []).push(
   `${VERSION} ${import.meta.url.replace(location.origin, "")}`
 );
@@ -103,6 +103,11 @@ const report = () => {
       .catch((err) => console.error("ha-map-provider: log write failed", err));
   }, 15000);
 };
+// Also from here: in the mobile app the HACS resource may watch the maps
+// before this instance loads, and watchMap would never schedule it.
+if (params.has("debug")) {
+  report();
+}
 let switched = false;
 if (requested && !PROVIDERS[requested]) {
   console.error(
