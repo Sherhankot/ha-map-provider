@@ -1,0 +1,6 @@
+{
+  "name": "HA Map Provider",
+  "filename": "ha-map-provider.js",
+  "render_readme": true,
+  "homeassistant": "2024.1.0"
+}
