@@ -52,9 +52,10 @@ const EARTH_E = 0.0818191908426;
 // module instance (other URL, no ?provider) may load next to extra_module_url.
 const PATCHED = Symbol.for("ha-map-provider");
 
-// The prototype patch of 1.0.x was marked with PATCHED itself; its own key
-// lets this version hook in next to a stale 1.0.x copy.
+// 1.0.x and 1.1.0 marked the prototype and the map with PATCHED itself; own
+// keys let this version hook in next to a stale copy of them.
 const PROTO_PATCHED = Symbol.for("ha-map-provider/proto");
+const MAP_WATCHED = Symbol.for("ha-map-provider/map");
 
 // Shared by the instances. An explicit ?provider wins over the default, in
 // whichever order they load: the mobile app may run the dashboard resource
@@ -161,10 +162,10 @@ const patchLayer = (leafletMap, layer) => {
 };
 
 const watchMap = (leafletMap) => {
-  if (leafletMap[PATCHED]) {
+  if (leafletMap[MAP_WATCHED]) {
     return;
   }
-  leafletMap[PATCHED] = true;
+  leafletMap[MAP_WATCHED] = true;
   shared.maps.add(leafletMap);
   leafletMap.on("unload", () => shared.maps.delete(leafletMap));
   leafletMap.eachLayer((layer) => patchLayer(leafletMap, layer));
@@ -219,6 +220,8 @@ const patchHaMap = (proto) => {
     const leafletMap = this.leafletMap ?? this._engine?.leafletMap;
     if (leafletMap) {
       watchMap(leafletMap);
+      // Cheap, and catches a layer a stale copy patched to its own provider.
+      leafletMap.eachLayer((layer) => patchLayer(leafletMap, layer));
     }
   };
   console.info(`ha-map-provider: base map -> ${shared.name} (${generation})`);
