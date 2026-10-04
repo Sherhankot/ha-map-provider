@@ -52,18 +52,25 @@ const EARTH_E = 0.0818191908426;
 // module instance (other URL, no ?provider) may load next to extra_module_url.
 const PATCHED = Symbol.for("ha-map-provider");
 
+// The prototype patch of 1.0.x was marked with PATCHED itself; its own key
+// lets this version hook in next to a stale 1.0.x copy.
+const PROTO_PATCHED = Symbol.for("ha-map-provider/proto");
+
 // Shared by the instances. An explicit ?provider wins over the default, in
-// whichever order they load.
+// whichever order they load: the mobile app may run the dashboard resource
+// first and draw maps before extra_module_url arrives.
 const shared = (globalThis[PATCHED] ??= {});
+shared.maps ??= new Set();
 const requested = new URL(import.meta.url).searchParams.get("provider");
+let switched = false;
 if (requested && !PROVIDERS[requested]) {
   console.error(
     `ha-map-provider: unknown provider "${requested}", known: ${Object.keys(PROVIDERS).join(", ")}`
   );
 } else if (requested || !shared.name) {
+  switched = Boolean(shared.name) && shared.name !== (requested || "2gis");
   shared.name = requested || "2gis";
 }
-const current = () => PROVIDERS[shared.name];
 
 const fillUrl = (template, x, y, z) =>
   template.replace(/\{([xyz])\}/g, (_, key) => ({ x, y, z })[key]);
@@ -127,16 +134,18 @@ function createEllipsoidalTile(coords, done) {
   return tile;
 }
 
+// The layer is marked with the provider it shows, so a provider that arrives
+// later switches it again.
 const patchLayer = (leafletMap, layer) => {
   if (
-    layer[PATCHED] ||
+    layer[PATCHED] === shared.name ||
     typeof layer._url !== "string" ||
-    !BUILTIN_TILES.some((mark) => layer._url.includes(mark))
+    (!layer[PATCHED] && !BUILTIN_TILES.some((mark) => layer._url.includes(mark)))
   ) {
     return;
   }
-  layer[PATCHED] = true;
-  const provider = current();
+  layer[PATCHED] = shared.name;
+  const provider = PROVIDERS[shared.name];
   leafletMap.attributionControl?.removeAttribution(layer.options.attribution);
   layer.options.subdomains = provider.subdomains ?? "abc";
   // Above it Leaflet scales the last level up instead of asking for tiles.
@@ -144,6 +153,8 @@ const patchLayer = (leafletMap, layer) => {
   layer.options.attribution = provider.attribution;
   if (provider.ellipsoidal) {
     layer.createTile = createEllipsoidalTile;
+  } else {
+    delete layer.createTile;
   }
   leafletMap.attributionControl?.addAttribution(provider.attribution);
   layer.setUrl(provider.url);
@@ -154,6 +165,8 @@ const watchMap = (leafletMap) => {
     return;
   }
   leafletMap[PATCHED] = true;
+  shared.maps.add(leafletMap);
+  leafletMap.on("unload", () => shared.maps.delete(leafletMap));
   leafletMap.eachLayer((layer) => patchLayer(leafletMap, layer));
   // A base layer may come later, e.g. 2026.9's raster fallback.
   leafletMap.on("layeradd", (ev) => patchLayer(leafletMap, ev.layer));
@@ -179,10 +192,10 @@ const refuseVectorStyles = () => {
 };
 
 const patchHaMap = (proto) => {
-  if (proto[PATCHED]) {
+  if (proto[PROTO_PATCHED]) {
     return;
   }
-  proto[PATCHED] = true;
+  proto[PROTO_PATCHED] = true;
 
   let generation;
   if (typeof proto._createEngine === "function") {
@@ -225,4 +238,12 @@ if (!shared.name) {
     }
     return origDefine.call(this, name, constructor, options);
   };
+}
+
+if (switched) {
+  // Maps drawn under the default before this ?provider arrived.
+  shared.maps.forEach((leafletMap) =>
+    leafletMap.eachLayer((layer) => patchLayer(leafletMap, layer))
+  );
+  console.info(`ha-map-provider: base map -> ${shared.name}`);
 }
